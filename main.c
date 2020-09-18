@@ -4,6 +4,14 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#ifdef __linux__ 
+  // TODO linux-only headers, if we need them
+#elif _WIN32
+  #include <windows.h>
+#else
+  #error Must be compiling for windows or linux (darwin not supported ATM)
+#endif
+
 // https://stackoverflow.com/questions/2100331/c-macro-definition-to-determine-big-endian-or-little-endian-machine
 #define IS_BIG_ENDIAN (!*(unsigned char *)&(uint16_t){1})
 
@@ -23,7 +31,23 @@ int main(int argc, char** argv) {
   data[1] += 1;
 
   // Read in this binary
-  FILE* f = fopen("/proc/self/exe", "rb");
+  FILE* f;
+#ifdef __linux__ 
+  
+  f = fopen("/proc/self/exe", "rb");
+  // record original FS file
+  char f_path[2048];
+  readlink("/proc/self/exe", f_path, 2047);
+
+#elif _WIN32
+
+  char f_path[2048];
+  GetModuleFileName(NULL, f_path, 2047);
+  f = fopen(f_path, "rb");
+
+#else
+  #error Must be compiling for windows or linux (darwin not supported ATM)
+#endif
   fseek(f, 0, SEEK_END);
   long fsize = ftell(f);
   fseek(f, 0, SEEK_SET);  /* same as rewind(f); */
@@ -32,23 +56,16 @@ int main(int argc, char** argv) {
   fread(binary, 1, fsize, f);
   fclose(f);
 
-  // record original FS file
-  char f_path[2048];
-  readlink("/proc/self/exe", f_path, 2047);
-
   // Record permissions as well
   struct stat st;
   stat(f_path, &st);
 
   // find location of data[0] in binary
   for (int i=0; i < fsize - sizeof(long); i++) {
-#ifdef IS_BIG_ENDIAN
+    // Big-endian
     if (binary[i] == 0x08 && binary[i+1] == 0x07 && binary[i+2] == 0x06 && binary[i+3] == 0x05 && binary[i+4] == 0x04 && binary[i+5] == 0x03 && binary[i+6] == 0x02 && binary[i+7] == 0x01) {
-#else
-    if (binary[i] == 0x01 && binary[i+1] == 0x02 && binary[i+2] == 0x03 && binary[i+3] == 0x04 && binary[i+4] == 0x05 && binary[i+5] == 0x06 && binary[i+6] == 0x07 && binary[i+7] == 0x08) {
-#endif
       // Write data[1] to i+8 
-      printf("Found 0x0102030405 at %d (fsize=%d)\n", i, fsize);
+      printf("[BE] Found 0x0102030405 at %d (fsize=%d)\n", i, fsize);
       
       char* data1_bytes = (long*) &data[1];
 
@@ -62,6 +79,24 @@ int main(int argc, char** argv) {
       binary[i+15] = data1_bytes[7];
 
     }
+
+    // Little-endian
+    if (binary[i] == 0x01 && binary[i+1] == 0x02 && binary[i+2] == 0x03 && binary[i+3] == 0x04 && binary[i+4] == 0x05 && binary[i+5] == 0x06 && binary[i+6] == 0x07 && binary[i+7] == 0x08) {
+      // Write data[1] to i+8 
+      printf("[LE] Found 0x0102030405 at %d (fsize=%d)\n", i, fsize);
+      
+      char* data1_bytes = (long*) &data[1];
+
+      binary[i+8] = data1_bytes[7];
+      binary[i+9] = data1_bytes[6];
+      binary[i+10] = data1_bytes[5];
+      binary[i+11] = data1_bytes[4];
+      binary[i+12] = data1_bytes[3];
+      binary[i+13] = data1_bytes[2];
+      binary[i+14] = data1_bytes[1];
+      binary[i+15] = data1_bytes[0];
+    }
+
   }
 
   // delete binary in FS
